@@ -4,7 +4,7 @@ defmodule RayTracer.Window do
 
     wx = :wx.new()
 
-    frame = :wxFrame.new(wx, :wx_const.wx_id_any, ~c"Elixir 3D OpenGL", opts)
+    frame = :wxFrame.new(wx, :wx_const.wx_id_any, ~c"Elixir Raytracer", opts)
 
     :wxWindow.connect(frame, :close_window)
 
