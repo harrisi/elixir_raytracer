@@ -78,6 +78,8 @@ defmodule RayTracer do
 
     state = if key_code == ?M do
       %{state | single: not(state.single)}
+    else
+      state
     end
 
     {:noreply, state}
