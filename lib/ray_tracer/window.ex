@@ -29,7 +29,7 @@ defmodule RayTracer.Window do
     # cursor = :wxCursor.new(:wx_const.wx_cursor_blank)
     # :wxWindow.setCursor(canvas, cursor)
 
-    :wxWindow.captureMouse(canvas)
+    # :wxWindow.captureMouse(canvas)
 
     :wxGLCanvas.setFocus(canvas)
 
