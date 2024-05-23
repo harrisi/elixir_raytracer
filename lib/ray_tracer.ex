@@ -11,12 +11,15 @@ defmodule RayTracer do
 
   @behaviour :wx_object
 
+  @window_width 1200
+  @window_height 800
+
   def start do
     :wx_object.start_link(__MODULE__, [], [])
   end
 
   def init(_args) do
-    window = Window.init()
+    window = Window.init(@window_width, @window_height)
 
     shader_program = Shader.init("shaders/vertex.vs", "shaders/fragment.fs")
 
@@ -172,7 +175,7 @@ defmodule RayTracer do
     :gl.bindTexture(:gl_const.gl_texture_2d, texture)
     :gl.bindVertexArray(vao)
 
-    :gl.texImage2D(:gl_const.gl_texture_2d, 0, :gl_const.gl_rgb32f, 1200, 800, 0, :gl_const.gl_rgb, :gl_const.gl_float, pixels)
+    :gl.texImage2D(:gl_const.gl_texture_2d, 0, :gl_const.gl_rgb32f, @window_width, @window_height, 0, :gl_const.gl_rgb, :gl_const.gl_float, pixels)
 
     :gl.drawElements(:gl_const.gl_triangles, 6, :gl_const.gl_unsigned_int, 0)
 
@@ -237,7 +240,7 @@ defmodule RayTracer do
   def create_matrices(%{camera: camera}) do
     model = Mat4.identity()
     view = Mat4.look_at(camera.pos, Vec3.add(camera.pos, camera.front), camera.up)
-    projection = Mat4.perspective(:math.pi() / 4, 800.0 / 600.0, 0.1, 100.0)
+    projection = Mat4.perspective(:math.pi() / 4, @window_width / @window_height, 0.1, 100.0)
 
     {model, view, projection}
   end

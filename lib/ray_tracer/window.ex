@@ -1,6 +1,6 @@
 defmodule RayTracer.Window do
-  def init() do
-    opts = [size: {1200, 800}]
+  def init(width, height) do
+    opts = [size: {width, height}]
 
     wx = :wx.new()
 
