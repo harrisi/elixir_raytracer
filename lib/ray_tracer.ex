@@ -252,36 +252,23 @@ defmodule RayTracer do
   defp raytrace_scene(state) do
     IO.inspect(state.dt, label: "previous frame took (ms)")
 
+    x_range = 0..(@window_height - 1)
+    y_range = 0..(@window_width - 1)
+
     if state.single do
-      for x <- 0..799, y <- 0..1199 do
-        [x / 800, y / 1200, 0]
+      for x <- x_range, y <- y_range, into: <<>> do
+        <<x / @window_height::float-native-size(32), y / @window_width::float-native-size(32), 0::float-native-size(32)>>
       end
-      |> List.flatten()
-      |> Enum.reduce(<<>>, fn el, acc -> acc <> <<el::float-native-size(32)>> end)
     else
-      num_schedulers = System.schedulers_online()
-      x_range = 0..799
-      y_range = 0..1199
-
-      x_chunks = Enum.chunk_every(x_range, div(Enum.count(x_range), num_schedulers))
-
-      tasks = x_chunks
-      |> Enum.map(fn x_chunk ->
-        Task.async(fn ->
-          x_chunk
-          |> Enum.flat_map(fn x ->
-            Enum.map(y_range, fn y ->
-              [x / 800, y / 1200, 0]
-            end)
-        end)
-      |> List.flatten()
-      |> Enum.reduce(<<>>, fn el, acc -> acc <> <<el::float-native-size(32)>> end)
-        end)
+      x_range
+      |> Enum.chunk_every(div(Enum.count(x_range), System.schedulers_online()))
+      # I think I can maybe combine this? I don't know.
+      |> Task.async_stream(fn x_chunk ->
+        for x <- x_chunk, y <- y_range, into: <<>> do
+          <<x / @window_height::float-native-size(32), y / @window_width::float-native-size(32), 0::float-native-size(32)>>
+        end
       end)
-
-      tasks
-      |> Task.await_many()
-      |> Enum.reduce(<<>>, fn binary, acc -> acc <> binary end)
+      |> Enum.into(<<>>, fn {:ok, bin} -> bin end)
     end
   end
 
