@@ -1,18 +1,24 @@
 defmodule RayTracer do
+  alias RayTracer.Sphere
   alias RayTracer.Camera
   alias RayTracer.Mat4
   alias RayTracer.OpenGL
   alias RayTracer.Shader
   alias RayTracer.Vec3
   alias RayTracer.Window
+  alias RayTracer.Ray
+  alias RayTracer.HittableList
+  alias RayTracer.Hittable
+  alias RayTracer.HitRecord
+  alias RayTracer.Interval
 
   import RayTracer.WxRecords
   import Bitwise, only: [|||: 2]
 
   @behaviour :wx_object
 
-  @window_width 1200
-  @window_height 800
+  @window_width 800
+  @window_height 450
 
   def start do
     :wx_object.start_link(__MODULE__, [], [])
@@ -57,7 +63,54 @@ defmodule RayTracer do
     |> Map.merge(opengl)
     |> Map.merge(gl_stuff)
 
-    pixels = raytrace_scene(state)
+    aspect_ratio = 16 / 9
+    image_width = @window_width
+
+    image_height = max(trunc(image_width / aspect_ratio), 1)
+
+    focal_length = 1
+    viewport_height = 2
+    viewport_width = viewport_height * (image_width / image_height)
+    camera_center = Vec3.new(0, 0, 0)
+
+    viewport_u = Vec3.new(viewport_width, 0, 0)
+    viewport_v = Vec3.new(0, viewport_height, 0)
+
+    pixel_delta_u = Vec3.scale(viewport_u, 1 / image_width)
+    pixel_delta_v = Vec3.scale(viewport_v, 1 / image_height)
+
+    viewport_upper_left = camera_center
+                          |> Vec3.subtract(Vec3.new(0, 0, focal_length))
+                          |> Vec3.subtract(Vec3.scale(viewport_u, 1/2))
+                          |> Vec3.subtract(Vec3.scale(viewport_v, 1/2))
+
+    pixel00_loc = viewport_upper_left
+             |> Vec3.add(Vec3.scale(Vec3.add(pixel_delta_u, pixel_delta_v), 1/2))
+
+    r = %{
+      samples_per_pixel: 5,
+      image_width: image_width,
+      image_height: image_height,
+      focal_length: focal_length,
+      viewport_height: viewport_height,
+      camera_center: camera_center,
+      viewport_u: viewport_u,
+      viewport_v: viewport_v,
+      pixel_delta_u: pixel_delta_u,
+      pixel_delta_v: pixel_delta_v,
+      viewport_upper_left: viewport_upper_left,
+      pixel00_loc: pixel00_loc,
+      world: %HittableList{
+        objects: [
+          Sphere.new(Vec3.new(0, -100.5, -1), 100),
+          Sphere.new(Vec3.new(0, 0, -1), 0.5),
+        ]
+      },
+    }
+
+    state = Map.merge(state, r)
+
+    pixels = raytrace_scene_rays(state)
 
     state = %{state | pixels: pixels}
 
@@ -85,6 +138,33 @@ defmodule RayTracer do
       state
     end
 
+    if key_code == ?E do
+      send(self(), :start_profiling)
+    end
+
+    {:noreply, state}
+  end
+
+  def handle_info(:start_profiling, state) do
+    # :tprof.start(%{type: :call_memory})
+    # :tprof.enable_trace(:all)
+    # :tprof.set_pattern(:_, :_, :_)
+    :eprof.start_profiling([self()])
+    :eprof.log('eprof')
+    Process.send_after(self(), :stop_profiling, 10_000)
+    {:noreply, state}
+  end
+
+  def handle_info(:stop_profiling, state) do
+    # :tprof.disable_trace(:all)
+    # sample = :tprof.collect()
+    # inspected = :tprof.inspect(sample, :process, :measurement)
+    # shell = :maps.get(self(), inspected)
+
+    # IO.puts(:tprof.format(shell))
+
+    :eprof.stop_profiling()
+    :eprof.analyze()
     {:noreply, state}
   end
 
@@ -128,17 +208,23 @@ defmodule RayTracer do
   end
 
   def handle_info(:update, state) do
-    :wx.batch(fn ->
-      render(state)
-    end)
-
-    state = update_camera(state)
-
-    {model, view, projection} = create_matrices(state)
-
     time = :erlang.system_time(:millisecond)
 
-    pixels = raytrace_scene(state)
+    tasks = [
+      Task.async(fn -> update_camera(state) end),
+      Task.async(fn -> create_matrices(state) end),
+      Task.async(fn -> raytrace_scene_rays(state) end),
+    ]
+
+    # state = update_camera(state)
+
+    # {model, view, projection} = create_matrices(state)
+
+    # time = :erlang.system_time(:millisecond)
+
+    # pixels = raytrace_scene(state)
+
+    [camera, {model, view, projection}, pixels] = Task.await_many(tasks, :infinity)
 
     state = %{
       state
@@ -150,7 +236,10 @@ defmodule RayTracer do
           projection: projection
         },
         pixels: pixels,
+        camera: camera,
     }
+
+    render(state)
 
     {:noreply, state}
   end
@@ -175,7 +264,8 @@ defmodule RayTracer do
     :gl.bindTexture(:gl_const.gl_texture_2d, texture)
     :gl.bindVertexArray(vao)
 
-    :gl.texImage2D(:gl_const.gl_texture_2d, 0, :gl_const.gl_rgb32f, @window_width, @window_height, 0, :gl_const.gl_rgb, :gl_const.gl_float, pixels)
+    # :gl.texImage2D(:gl_const.gl_texture_2d, 0, :gl_const.gl_rgb32f, @window_width, @window_height, 0, :gl_const.gl_rgb, :gl_const.gl_float, pixels)
+    :gl.texImage2D(:gl_const.gl_texture_2d, 0, :gl_const.gl_rgb, @window_width, @window_height, 0, :gl_const.gl_rgb, :gl_const.gl_unsigned_byte, pixels)
 
     :gl.drawElements(:gl_const.gl_triangles, 6, :gl_const.gl_unsigned_int, 0)
 
@@ -234,7 +324,7 @@ defmodule RayTracer do
         new_pos
       end
 
-    %{state | camera: %{camera | pos: new_pos}}
+    %Camera{camera | pos: new_pos}
   end
 
   def create_matrices(%{camera: camera}) do
@@ -249,6 +339,74 @@ defmodule RayTracer do
     :gl.uniformMatrix4fv(location, :gl_const.gl_false(), [Mat4.flatten(matrix)])
   end
 
+  # defp hit_sphere(center, radius, ray) do
+  #   oc = Vec3.subtract(center, ray.origin)
+  #   a = Vec3.dot(ray.direction, ray.direction)
+  #   b = -2 * Vec3.dot(ray.direction, oc)
+  #   c = Vec3.dot(oc, oc) - radius * radius
+  #   discriminant = b * b - 4 * a * c
+  #   if discriminant < 0 do
+  #     -1
+  #   else
+  #     (-b - :math.sqrt(discriminant)) / (2 * a)
+  #   end
+  # end
+
+  # defp hit_sphere(center, radius, ray) do
+  #   oc = Vec3.subtract(center, ray.origin)
+  #   a = Vec3.length_squared(ray.direction)
+  #   h = Vec3.dot(ray.direction, oc)
+  #   c = Vec3.length_squared(oc) - radius * radius
+  #   discriminant = h * h - a * c
+  #   if discriminant < 0 do
+  #     -1
+  #   else
+  #     h - :math.sqrt(discriminant) / a
+  #   end
+  # end
+
+  defp write_color({r, g, b}) do
+    i = Interval.new(0, 1)
+      <<
+        round(255 * Interval.clamp(i, r)),
+        round(255 * Interval.clamp(i, g)),
+        round(255 * Interval.clamp(i, b))
+      >>
+  end
+
+ defp ray_color(ray, world) do
+    {res, rec} = Hittable.hit(world, ray, Interval.new(0, :infinity), HitRecord.new())
+
+    if res do
+      Vec3.scale(Vec3.add(rec.normal, Vec3.new(1, 1, 1)), 0.5)
+    else
+      {_, y, _} = Vec3.unit(ray.direction)
+      a = 0.5 * (y + 1)
+
+      Vec3.scale(Vec3.new(1, 1, 1), 1 - a)
+      |> Vec3.add(Vec3.scale(Vec3.new(0.5, 0.7, 1), a))
+    end
+
+    # t = hit_sphere(Vec3.new(0, 0, -1), 0.5, ray)
+    # if (t > 0) do
+    #   {nx, ny, nz} = ray
+    #     |> Ray.at(t)
+    #     |> Vec3.subtract(Vec3.new(0, 0, -1))
+    #     |> Vec3.unit
+
+    #   {r, g, b} = Vec3.scale(Vec3.new(nx + 1, ny + 1, nz + 1), 0.5)
+    #   <<round(r * 255), round(g * 255), round(b * 255)>>
+    # else
+    #   {_, y, _} = Vec3.unit(ray.direction)
+    #   a = 0.5 * (y + 1)
+
+    #   {r, g, b} = Vec3.scale(Vec3.new(1, 1, 1), 1 - a)
+    #   |> Vec3.add(Vec3.scale(Vec3.new(0.5, 0.7, 1), a))
+
+    #   <<round(r * 255), round(g * 255), round(b * 255)>>
+    # end
+  end
+
   defp raytrace_scene(state) do
     IO.inspect(state.dt, label: "previous frame took (ms)")
 
@@ -257,18 +415,98 @@ defmodule RayTracer do
 
     if state.single do
       for x <- x_range, y <- y_range, into: <<>> do
-        <<x / @window_height::float-native-size(32), y / @window_width::float-native-size(32), 0::float-native-size(32)>>
+        <<round(x / @window_height * 255), round(y / @window_width * 255), 0>>
       end
     else
       x_range
       |> Enum.chunk_every(div(Enum.count(x_range), System.schedulers_online()))
-      # I think I can maybe combine this? I don't know.
-      |> Task.async_stream(fn x_chunk ->
-        for x <- x_chunk, y <- y_range, into: <<>> do
-          <<x / @window_height::float-native-size(32), y / @window_width::float-native-size(32), 0::float-native-size(32)>>
-        end
+      |> Enum.map(fn x_chunk ->
+        Task.async(fn ->
+          do_chunk(x_chunk, y_range)
+        end)
       end)
-      |> Enum.into(<<>>, fn {:ok, bin} -> bin end)
+      |> Task.await_many()
+      |> Enum.into(<<>>, fn bin -> bin end)
+
+      # |> Task.async_stream(fn x_chunk ->
+      #   do_chunk(x_chunk, y_range)
+      # end)
+      # |> Enum.into(<<>>, fn {:ok, bin} -> bin end)
+    end
+  end
+
+  defp raytrace_scene_rays(state) do
+    IO.inspect(state.dt, label: "[ray] previous frame took (ms)")
+
+    x_range = 0..(@window_height - 1)
+    y_range = 0..(@window_width - 1)
+
+    if state.single do
+      for x <- x_range, y <- y_range, into: <<>> do
+        # pixel_center = state.pixel00_loc
+        # |> Vec3.add(Vec3.scale(state.pixel_delta_u, y))
+        # |> Vec3.add(Vec3.scale(state.pixel_delta_v, x))
+
+        # ray_direction = Vec3.subtract(pixel_center, state.camera_center)
+
+        # ray = Ray.new(state.camera_center, ray_direction)
+
+        # ray_color(ray, state.world)
+        # |> write_color
+
+        Enum.reduce(0..(state.samples_per_pixel - 1), Vec3.new(0, 0, 0), fn _, acc ->
+          {ox, oy, _} = Vec3.new(:rand.uniform() - 0.5, :rand.uniform() - 0.5, 0)
+
+          pixel_sample = state.pixel00_loc
+          |> Vec3.add(Vec3.scale(state.pixel_delta_u, oy + y))
+          |> Vec3.add(Vec3.scale(state.pixel_delta_v, ox + x))
+
+          ray_direction = Vec3.subtract(pixel_sample, state.camera_center)
+
+          ray = Ray.new(state.camera_center, ray_direction)
+
+          Vec3.add(acc, ray_color(ray, state.world))
+        end)
+        |> Vec3.scale(1 / state.samples_per_pixel)
+        |> write_color
+      end
+    else
+      x_range
+      |> Enum.chunk_every(div(Enum.count(x_range), System.schedulers_online()))
+      |> Enum.map(fn x_chunk ->
+        Task.async(fn ->
+          do_ray_chunk(x_chunk, y_range, state)
+        end)
+      end)
+      |> Task.await_many()
+      |> Enum.into(<<>>, & &1)
+
+    end
+  end
+
+  defp do_ray_chunk(x_chunk, y_range, state) do
+    for x <- x_chunk, y <- y_range, into: <<>> do
+      Enum.reduce(0..(state.samples_per_pixel - 1), Vec3.new(0, 0, 0), fn _, acc ->
+        {ox, oy, _} = Vec3.new(:rand.uniform() - 0.5, :rand.uniform() - 0.5, 0)
+
+        pixel_sample = state.pixel00_loc
+        |> Vec3.add(Vec3.scale(state.pixel_delta_u, oy + y))
+        |> Vec3.add(Vec3.scale(state.pixel_delta_v, ox + x))
+
+        ray_direction = Vec3.subtract(pixel_sample, state.camera_center)
+
+        ray = Ray.new(state.camera_center, ray_direction)
+
+        Vec3.add(acc, ray_color(ray, state.world))
+      end)
+      |> Vec3.scale(1 / state.samples_per_pixel)
+      |> write_color
+    end
+  end
+
+  defp do_chunk(x_chunk, y_range) do
+    for x <- x_chunk, y <- y_range, into: <<>> do
+      <<round(x / @window_height * 255), round(y / @window_width * 255), 0>>
     end
   end
 
