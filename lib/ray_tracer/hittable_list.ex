@@ -18,7 +18,7 @@ defimpl RayTracer.Hittable, for: RayTracer.HittableList do
     Enum.reduce(obj.objects, {false, rec}, fn o, {hit_anything_acc, rec_acc} ->
       case Hittable.hit(o, ray, Interval.new(ray_t.min, closest_so_far), temp_rec) do
         {true, temp_rec} ->
-          {true, %{rec_acc | t: temp_rec.t, p: temp_rec.p, normal: temp_rec.normal, front_face: temp_rec.front_face}}
+          {true, %{rec_acc | t: temp_rec.t, p: temp_rec.p, normal: temp_rec.normal, front_face: temp_rec.front_face, mat: temp_rec.mat}}
           # |> IO.inspect(label: "hit")
         {false, _} ->
           {hit_anything_acc, rec_acc}

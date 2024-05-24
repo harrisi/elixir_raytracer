@@ -1,6 +1,7 @@
 defmodule RayTracer.HitRecord do
   alias RayTracer.Vec3
-  defstruct [p: Vec3.new(), normal: Vec3.new(), t: 0.0, front_face: false]
+
+  defstruct [p: Vec3.new(), normal: Vec3.new(), t: 0.0, front_face: false, mat: nil]
 
   def new() do
     %__MODULE__{}

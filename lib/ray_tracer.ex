@@ -1,4 +1,5 @@
 defmodule RayTracer do
+  alias RayTracer.Lambertian
   alias RayTracer.Sphere
   alias RayTracer.Camera
   alias RayTracer.Mat4
@@ -11,6 +12,9 @@ defmodule RayTracer do
   alias RayTracer.Hittable
   alias RayTracer.HitRecord
   alias RayTracer.Interval
+  alias RayTracer.Material
+  alias RayTracer.Lambertian
+  alias RayTracer.Metal
 
   import RayTracer.WxRecords
   import Bitwise, only: [|||: 2]
@@ -40,7 +44,7 @@ defmodule RayTracer do
       dt: 1,
       t: :erlang.system_time(:millisecond),
       pixels: nil,
-      single: true,
+      single: false,
     }
 
     {model, view, projection} = create_matrices(state)
@@ -87,8 +91,13 @@ defmodule RayTracer do
     pixel00_loc = viewport_upper_left
              |> Vec3.add(Vec3.scale(Vec3.add(pixel_delta_u, pixel_delta_v), 1/2))
 
+    mat_ground = Lambertian.new(Vec3.new(0.8, 0.8, 0))
+    mat_center = Lambertian.new(Vec3.new(0.1, 0.2, 0.5))
+    mat_left = Metal.new(Vec3.new(0.8, 0.8, 0.8))
+    mat_right = Metal.new(Vec3.new(0.8, 0.6, 0.2))
+
     r = %{
-      samples_per_pixel: 5,
+      samples_per_pixel: 20,
       image_width: image_width,
       image_height: image_height,
       focal_length: focal_length,
@@ -102,17 +111,15 @@ defmodule RayTracer do
       pixel00_loc: pixel00_loc,
       world: %HittableList{
         objects: [
-          Sphere.new(Vec3.new(0, -100.5, -1), 100),
-          Sphere.new(Vec3.new(0, 0, -1), 0.5),
+          Sphere.new(Vec3.new(0, -100.5, -1), 100, mat_ground),
+          Sphere.new(Vec3.new(1, 0, -1), 0.5, mat_right),
+          Sphere.new(Vec3.new(-1, 0, -1), 0.5, mat_left),
+          Sphere.new(Vec3.new(0, 0, -1.2), 0.5, mat_center),
         ]
       },
     }
 
     state = Map.merge(state, r)
-
-    pixels = raytrace_scene_rays(state)
-
-    state = %{state | pixels: pixels}
 
     send(self(), :update)
 
@@ -151,7 +158,7 @@ defmodule RayTracer do
     # :tprof.set_pattern(:_, :_, :_)
     :eprof.start_profiling([self()])
     :eprof.log('eprof')
-    Process.send_after(self(), :stop_profiling, 10_000)
+    Process.send_after(self(), :stop_profiling, 30_000)
     {:noreply, state}
   end
 
@@ -365,20 +372,36 @@ defmodule RayTracer do
   #   end
   # end
 
+  defp linear_to_gamma(linear_component) do
+    if linear_component > 0 do
+      :math.sqrt(linear_component)
+    else
+      0
+    end
+  end
+
   defp write_color({r, g, b}) do
     i = Interval.new(0, 1)
       <<
-        round(255 * Interval.clamp(i, r)),
-        round(255 * Interval.clamp(i, g)),
-        round(255 * Interval.clamp(i, b))
+        round(255 * Interval.clamp(i, linear_to_gamma(r))),
+        round(255 * Interval.clamp(i, linear_to_gamma(g))),
+        round(255 * Interval.clamp(i, linear_to_gamma(b)))
       >>
   end
 
- defp ray_color(ray, world) do
-    {res, rec} = Hittable.hit(world, ray, Interval.new(0, :infinity), HitRecord.new())
+  defp ray_color(_ray, 0, _world), do: Vec3.new(0, 0, 0)
+  defp ray_color(ray, depth, world) do
+    {res, rec} = Hittable.hit(world, ray, Interval.new(0.001, :infinity), HitRecord.new())
 
     if res do
-      Vec3.scale(Vec3.add(rec.normal, Vec3.new(1, 1, 1)), 0.5)
+      {res2, attenuation, scattered} = Material.scatter(rec.mat, ray, rec, Vec3.new(), Ray.new())
+      if res2 do
+        Vec3.multiply(attenuation, ray_color(scattered, depth - 1, world))
+      else
+        Vec3.new(0, 0, 0)
+      end
+      # dir = Vec3.add(rec.normal, Vec3.random_unit_vector())
+      # Vec3.scale(ray_color(Ray.new(rec.p, dir), depth - 1, world), 0.5)
     else
       {_, y, _} = Vec3.unit(ray.direction)
       a = 0.5 * (y + 1)
@@ -386,25 +409,6 @@ defmodule RayTracer do
       Vec3.scale(Vec3.new(1, 1, 1), 1 - a)
       |> Vec3.add(Vec3.scale(Vec3.new(0.5, 0.7, 1), a))
     end
-
-    # t = hit_sphere(Vec3.new(0, 0, -1), 0.5, ray)
-    # if (t > 0) do
-    #   {nx, ny, nz} = ray
-    #     |> Ray.at(t)
-    #     |> Vec3.subtract(Vec3.new(0, 0, -1))
-    #     |> Vec3.unit
-
-    #   {r, g, b} = Vec3.scale(Vec3.new(nx + 1, ny + 1, nz + 1), 0.5)
-    #   <<round(r * 255), round(g * 255), round(b * 255)>>
-    # else
-    #   {_, y, _} = Vec3.unit(ray.direction)
-    #   a = 0.5 * (y + 1)
-
-    #   {r, g, b} = Vec3.scale(Vec3.new(1, 1, 1), 1 - a)
-    #   |> Vec3.add(Vec3.scale(Vec3.new(0.5, 0.7, 1), a))
-
-    #   <<round(r * 255), round(g * 255), round(b * 255)>>
-    # end
   end
 
   defp raytrace_scene(state) do
@@ -425,7 +429,7 @@ defmodule RayTracer do
           do_chunk(x_chunk, y_range)
         end)
       end)
-      |> Task.await_many()
+      |> Task.await_many(:infinity)
       |> Enum.into(<<>>, fn bin -> bin end)
 
       # |> Task.async_stream(fn x_chunk ->
@@ -465,7 +469,7 @@ defmodule RayTracer do
 
           ray = Ray.new(state.camera_center, ray_direction)
 
-          Vec3.add(acc, ray_color(ray, state.world))
+          Vec3.add(acc, ray_color(ray, 5, state.world))
         end)
         |> Vec3.scale(1 / state.samples_per_pixel)
         |> write_color
@@ -478,7 +482,7 @@ defmodule RayTracer do
           do_ray_chunk(x_chunk, y_range, state)
         end)
       end)
-      |> Task.await_many()
+      |> Task.await_many(:infinity)
       |> Enum.into(<<>>, & &1)
 
     end
@@ -497,7 +501,7 @@ defmodule RayTracer do
 
         ray = Ray.new(state.camera_center, ray_direction)
 
-        Vec3.add(acc, ray_color(ray, state.world))
+        Vec3.add(acc, ray_color(ray, 10, state.world))
       end)
       |> Vec3.scale(1 / state.samples_per_pixel)
       |> write_color

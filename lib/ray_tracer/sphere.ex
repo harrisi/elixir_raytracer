@@ -1,14 +1,14 @@
 defmodule RayTracer.Sphere do
   alias RayTracer.Vec3
 
-  defstruct [center: Vec3.new(), radius: 0.0]
+  defstruct [center: Vec3.new(), radius: 0.0, mat: nil]
 
   def new do
     %__MODULE__{}
   end
 
-  def new(center, radius) do
-    %__MODULE__{center: center, radius: radius}
+  def new(center, radius, mat) do
+    %__MODULE__{center: center, radius: max(0, radius), mat: mat}
   end
 end
 
@@ -42,6 +42,7 @@ defimpl RayTracer.Hittable, for: RayTracer.Sphere do
           {true, %HitRecord{
               t: root,
               p: new_p,
+              mat: obj.mat
             } |> HitRecord.set_face_normal(ray, outward_normal)
           }
         end
@@ -51,6 +52,7 @@ defimpl RayTracer.Hittable, for: RayTracer.Sphere do
         {true, %HitRecord{
             t: root,
             p: new_p,
+            mat: obj.mat
           } |> HitRecord.set_face_normal(ray, outward_normal)
         }
       end
